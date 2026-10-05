@@ -27,6 +27,8 @@ def _print_answer(answer: Answer, show_sources: bool) -> None:
             print(f"  [{n}] {hit.chunk.location}")
     for w in answer.warnings:
         print(f"\n! {w}")
+    for sentence in answer.unsupported:
+        print(f"  - {textwrap.shorten(sentence, 160)}")
     if show_sources and answer.citations:
         print("\nCited passages:")
         for c in answer.citations:
@@ -48,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--quotes", action="store_true", help="show the cited passages")
     p = sub.add_parser("chat", help="interactive question loop with follow-ups")
     p.add_argument("--quotes", action="store_true")
-    p = sub.add_parser("search", help="show retrieved chunks without calling Claude")
+    p = sub.add_parser("search", help="show retrieved chunks without calling the LLM")
     p.add_argument("query", nargs="+")
     sub.add_parser("list", help="list indexed documents")
     p = sub.add_parser("remove", help="remove a document by file name")

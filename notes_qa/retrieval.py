@@ -109,6 +109,25 @@ class SentenceTransformerEmbedder:
         return np.asarray(vecs, dtype=np.float32)
 
 
+class OllamaEmbedder:
+    """Dense embedder backed by an Ollama embedding model (e.g. nomic-embed-text)."""
+
+    def __init__(self, model_name: str, host: str | None = None, batch_size: int = 64):
+        import ollama
+
+        self.client = ollama.Client(host=host)
+        self.model = model_name
+        self.batch_size = batch_size
+
+    def encode(self, texts: Sequence[str]) -> np.ndarray:
+        vecs: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            batch = list(texts[start:start + self.batch_size])
+            vecs.extend(self.client.embed(model=self.model, input=batch).embeddings)
+        arr = np.asarray(vecs, dtype=np.float32)
+        return arr / np.maximum(np.linalg.norm(arr, axis=1, keepdims=True), 1e-9)
+
+
 @dataclass
 class Hit:
     chunk: Chunk

@@ -3,7 +3,7 @@
     python eval/eval_retrieval.py [eval/retrieval_questions.json]
 
 For answerable questions it reports hit@1 / hit@k (the expected section is the
-top chunk / among the chunks sent to Claude) and how often the gate wrongly
+top chunk / among the chunks sent to the LLM) and how often the gate wrongly
 declines. For unanswerable questions (section = null) it reports how often the
 gate correctly declines before any model call. No API key needed.
 """

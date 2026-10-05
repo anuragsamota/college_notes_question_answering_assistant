@@ -12,7 +12,7 @@ from notes_qa.config import Settings
 from notes_qa.generator import Answer, AnswerGenerator
 from notes_qa.loaders import Page, iter_note_files, load_file
 from notes_qa.retrieval import (Embedder, HybridRetriever, RetrievalResult,
-                                SentenceTransformerEmbedder, analyze)
+                                OllamaEmbedder, SentenceTransformerEmbedder, analyze)
 from notes_qa.store import DocumentInfo, IndexStore, summarize_documents
 
 
@@ -26,16 +26,22 @@ class Assistant:
         self.chunker = Chunker(s.chunk_chars, s.chunk_overlap_sentences)
         self.embedder = embedder
         if self.embedder is None and s.embedder == "sentence-transformers":
-            self.embedder = SentenceTransformerEmbedder(s.dense_model)
+            self.embedder = SentenceTransformerEmbedder(s.resolved_embed_model)
+        elif self.embedder is None and s.embedder == "ollama":
+            self.embedder = OllamaEmbedder(s.resolved_embed_model, s.ollama_host)
         self.generator = generator or AnswerGenerator(
-            model=s.model, effort=s.effort or None, max_tokens=s.max_tokens,
-            use_fallbacks=s.use_fallbacks)
+            model=s.model, host=s.ollama_host, temperature=s.temperature,
+            num_ctx=s.num_ctx, max_tokens=s.max_tokens,
+            min_overlap=s.min_citation_overlap)
         self.chunks, embeddings = self.store.load(self._embedder_name)
         self._rebuild(embeddings)
 
     @property
     def _embedder_name(self) -> str:
-        return self.settings.embedder if self.embedder is not None else "tfidf"
+        if self.embedder is None:
+            return "tfidf"
+        # Include the model so switching models forces fresh embeddings.
+        return f"{self.settings.embedder}:{self.settings.resolved_embed_model}"
 
     def _rebuild(self, embeddings: np.ndarray | None = None) -> None:
         self.retriever = HybridRetriever(self.chunks, embedder=self.embedder,

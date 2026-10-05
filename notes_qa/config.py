@@ -30,13 +30,27 @@ class Settings:
     min_term_coverage: float = field(default_factory=lambda: float(_env("MIN_COVERAGE", "0.5")))
     # With dense embeddings, a top hit at or above this cosine also passes the gate.
     min_dense_similarity: float = field(default_factory=lambda: float(_env("MIN_DENSE_SIM", "0.45")))
-    # "tfidf" (no extra deps) or "sentence-transformers" (needs the dense extra).
+    # Dense embeddings added to hybrid retrieval: "tfidf" (none, no extra deps),
+    # "ollama" (an Ollama embedding model) or "sentence-transformers".
     embedder: str = field(default_factory=lambda: _env("EMBEDDER", "tfidf"))
-    dense_model: str = field(default_factory=lambda: _env("DENSE_MODEL", "all-MiniLM-L6-v2"))
+    # Embedding model; defaults to nomic-embed-text (ollama) / all-MiniLM-L6-v2.
+    embed_model: str = field(default_factory=lambda: _env("EMBED_MODEL", ""))
 
-    # Generation.
-    model: str = field(default_factory=lambda: _env("MODEL", "claude-opus-5-5"))
-    effort: str = field(default_factory=lambda: _env("EFFORT", "medium"))
-    max_tokens: int = 16000
-    # Server-side refusal fallback (Claude API only; disable on Bedrock/Vertex/Foundry).
-    use_fallbacks: bool = field(default_factory=lambda: _env("FALLBACKS", "1") == "1")
+    # Generation with a local model served by Ollama.
+    # Host defaults to $OLLAMA_HOST, then http://localhost:11434.
+    ollama_host: str | None = field(default_factory=lambda: os.environ.get("OLLAMA_HOST"))
+    model: str = field(default_factory=lambda: _env("MODEL", "llama3.1:8b"))
+    temperature: float = field(default_factory=lambda: float(_env("TEMPERATURE", "0.1")))
+    # Ollama's default context window is small; 6 excerpts + prompt need ~3-4k tokens.
+    num_ctx: int = field(default_factory=lambda: int(_env("NUM_CTX", "8192")))
+    max_tokens: int = field(default_factory=lambda: int(_env("MAX_TOKENS", "1024")))
+    # A cited sentence counts as verified when this share of its content words
+    # appears in the excerpt(s) it cites.
+    min_citation_overlap: float = field(
+        default_factory=lambda: float(_env("MIN_CITATION_OVERLAP", "0.6")))
+
+    @property
+    def resolved_embed_model(self) -> str:
+        if self.embed_model:
+            return self.embed_model
+        return "nomic-embed-text" if self.embedder == "ollama" else "all-MiniLM-L6-v2"

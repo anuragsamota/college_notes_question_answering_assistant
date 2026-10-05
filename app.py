@@ -58,6 +58,7 @@ with st.sidebar:
     else:
         st.info("No notes indexed yet.")
 
+    st.caption(f"Model: `{assistant.settings.model}` via Ollama")
     show_quotes = st.toggle("Show cited passages", value=True)
     if st.button("Clear conversation"):
         st.session_state.messages = []
@@ -78,14 +79,19 @@ def render_answer(answer) -> None:
         st.warning(answer.text)
     for w in answer.warnings:
         st.caption(f"⚠️ {w}")
+    if answer.unsupported:
+        with st.expander("Statements not matched to your notes"):
+            for sentence in answer.unsupported:
+                st.markdown(f"- {sentence}")
     if answer.cited_sources:
         with st.expander("Sources", expanded=False):
             for n, hit in answer.cited_sources:
                 st.markdown(f"**[{n}] {hit.chunk.location}**")
                 if show_quotes:
-                    for c in answer.citations:
-                        if c.number == n and c.cited_text.strip():
-                            st.markdown(f"> {c.cited_text.strip()}")
+                    quotes = dict.fromkeys(c.cited_text.strip() for c in answer.citations
+                                           if c.number == n and c.cited_text.strip())
+                    for quote in quotes:
+                        st.markdown(f"> {quote}")
 
 
 for msg in st.session_state.messages:
