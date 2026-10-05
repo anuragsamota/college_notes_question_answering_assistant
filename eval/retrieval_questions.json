@@ -1,0 +1,26 @@
+{
+  "notes": ["sample_notes/os_lecture_notes.md"],
+  "questions": [
+    {"q": "What are the five states of a process?", "section": "Process States"},
+    {"q": "What information is stored in a PCB?", "section": "Process Control Block"},
+    {"q": "Why is context switch time considered overhead?", "section": "Process Control Block"},
+    {"q": "What is the convoy effect?", "section": "First-Come, First-Served (FCFS)"},
+    {"q": "Why can't SJF be implemented exactly?", "section": "Shortest Job First (SJF)"},
+    {"q": "What is the preemptive version of SJF called?", "section": "Shortest Job First (SJF)"},
+    {"q": "What happens if the round robin quantum is too small?", "section": "Round Robin (RR)"},
+    {"q": "How does aging prevent starvation?", "section": "Priority Scheduling"},
+    {"q": "List the Coffman conditions", "section": "Necessary Conditions"},
+    {"q": "What is circular wait?", "section": "Necessary Conditions"},
+    {"q": "How does the Banker's algorithm decide whether to grant a request?", "section": "Banker's Algorithm"},
+    {"q": "How is the Need matrix computed?", "section": "Banker's Algorithm"},
+    {"q": "Does paging cause external fragmentation?", "section": "Paging"},
+    {"q": "Formula for effective access time with a TLB", "section": "Translation Lookaside Buffer"},
+    {"q": "What does a segment table store?", "section": "Segmentation"},
+    {"q": "What is Belady's anomaly?", "section": "Page Replacement"},
+    {"q": "Why can't the optimal page replacement algorithm be implemented?", "section": "Page Replacement"},
+    {"q": "Who won the 2018 FIFA World Cup?", "section": null},
+    {"q": "Explain TCP congestion control", "section": null},
+    {"q": "What is the time complexity of quicksort?", "section": null},
+    {"q": "Describe the structure of a neuron", "section": null}
+  ]
+}
