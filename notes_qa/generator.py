@@ -23,6 +23,7 @@ from typing import Any, Sequence
 import ollama
 
 from notes_qa.retrieval import Hit, analyze
+from notes_qa.servers import NoServerAvailable, OllamaRouter
 
 ABSTAIN_TOKEN = "NOT_IN_NOTES"
 
@@ -72,6 +73,7 @@ class Answer:
     unsupported: list[str] = field(default_factory=list)  # sentences that failed checks
     warnings: list[str] = field(default_factory=list)
     model: str | None = None
+    server: str | None = None    # name of the Ollama server that answered
 
     @property
     def grounded(self) -> bool:
@@ -94,22 +96,12 @@ def build_prompt(question: str, hits: Sequence[Hit]) -> str:
 
 
 class AnswerGenerator:
-    def __init__(self, client: ollama.Client | None = None, *,
-                 model: str = "llama3.1:8b", host: str | None = None,
-                 temperature: float = 0.1, num_ctx: int = 8192, max_tokens: int = 1024,
-                 min_overlap: float = 0.6):
-        self._client = client
-        self.host = host
-        self.model = model
+    def __init__(self, router: OllamaRouter, *, temperature: float = 0.1,
+                 num_ctx: int = 8192, max_tokens: int = 1024, min_overlap: float = 0.6):
+        self.router = router
         self.options = {"temperature": temperature, "num_ctx": num_ctx,
                         "num_predict": max_tokens}
         self.min_overlap = min_overlap
-
-    @property
-    def client(self) -> ollama.Client:
-        if self._client is None:
-            self._client = ollama.Client(host=self.host)  # None -> $OLLAMA_HOST or localhost
-        return self._client
 
     def generate(self, question: str, hits: Sequence[Hit],
                  history: Sequence[tuple[str, str]] = ()) -> Answer:
@@ -120,24 +112,38 @@ class AnswerGenerator:
             messages.append({"role": "assistant", "content": _strip_markers(prev_a)})
         messages.append({"role": "user", "content": build_prompt(question, hits)})
 
-        try:
-            response = self.client.chat(model=self.model, messages=messages,
-                                        options=self.options)
-        except ollama.ResponseError as exc:
-            if exc.status_code == 404:
-                msg = (f"Ollama model '{self.model}' is not installed. "
-                       f"Run `ollama pull {self.model}`.")
-            else:
-                msg = f"Ollama error ({exc.status_code}): {exc.error}"
-            return Answer(question, msg, "error", sources=list(hits), model=self.model)
-        except ConnectionError:
-            return Answer(question, "Could not reach Ollama. Start it with `ollama serve` "
-                          "(or set OLLAMA_HOST).", "error", sources=list(hits),
-                          model=self.model)
+        def error(msg: str) -> Answer:
+            return Answer(question, msg, "error", sources=list(hits))
 
-        return parse_response(question, hits, response.message.content or "",
-                              done_reason=response.done_reason, model=self.model,
-                              min_overlap=self.min_overlap)
+        try:
+            response, server, model = self.router.chat(messages, self.options)
+        except NoServerAvailable as exc:
+            return error(_unavailable_message(self.router, exc))
+        except ollama.ResponseError as exc:
+            server = self.router.last_attempt
+            if exc.status_code == 404:
+                model = self.router.chat_model(server)
+                return error(f"Model '{model}' is not installed on Ollama server "
+                             f"'{server.name}'. Run `ollama pull {model}` on that machine, "
+                             "or pick another model for it.")
+            return error(f"Ollama error from '{server.name}' ({exc.status_code}): {exc.error}")
+
+        answer = parse_response(question, hits, response.message.content or "",
+                                done_reason=response.done_reason, model=model,
+                                min_overlap=self.min_overlap)
+        answer.server = server.name
+        return answer
+
+
+def _unavailable_message(router: OllamaRouter, exc: NoServerAvailable) -> str:
+    servers = router.registry.candidates(router.selection)
+    if len(servers) == 1 and len(exc.errors) == 1:
+        s = servers[0]
+        hint = ("Start it with `ollama serve`." if s.is_local else
+                "Check the machine is on and Ollama listens on the network "
+                "(OLLAMA_HOST=0.0.0.0 on that machine, port 11434 open).")
+        return f"Could not reach Ollama server '{s.name}' at {s.host}. {hint}"
+    return "No Ollama server could answer: " + "; ".join(exc.errors) + "."
 
 
 def _split_sentences(text: str) -> list[str]:

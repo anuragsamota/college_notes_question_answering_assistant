@@ -8,6 +8,7 @@ import pytest
 
 from notes_qa.config import Settings
 from notes_qa.pipeline import Assistant
+from notes_qa.servers import OllamaServer, ServerRegistry
 
 
 class StubOllama(BaseHTTPRequestHandler):
@@ -24,6 +25,12 @@ class StubOllama(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_GET(self):
+        if self.path == "/api/tags":
+            return self._send(200, {"models": [{"name": m, "model": m}
+                                               for m in sorted(self.installed_models)]})
+        self._send(404, {"error": "unknown path"})
 
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -62,10 +69,20 @@ def ollama_host():
     server.shutdown()
 
 
-def test_end_to_end_with_ollama_chat_and_embeddings(tmp_path, sample_path, ollama_host):
+def make_settings(tmp_path, servers):
     settings = Settings()
     settings.index_dir = tmp_path / "index"
-    settings.ollama_host = ollama_host
+    settings.servers_file = tmp_path / "ollama_servers.json"
+    settings.ollama_servers = servers
+    settings.ollama_server = ""
+    return settings
+
+
+DEAD = "http://127.0.0.1:9"   # nothing listens on the discard port
+
+
+def test_end_to_end_with_ollama_chat_and_embeddings(tmp_path, sample_path, ollama_host):
+    settings = make_settings(tmp_path, f"local={ollama_host}")
     settings.embedder = "ollama"
     assistant = Assistant(settings)
     assistant.ingest_paths([sample_path])
@@ -73,6 +90,7 @@ def test_end_to_end_with_ollama_chat_and_embeddings(tmp_path, sample_path, ollam
 
     answer = assistant.ask("How does the Banker's algorithm decide whether to grant a request?")
     assert answer.status == "answered" and answer.grounded
+    assert answer.server == "local"
     assert answer.support_ratio == 1.0
     assert answer.cited_sources[0][1].chunk.section.endswith("Banker's Algorithm")
 
@@ -89,10 +107,47 @@ def test_end_to_end_with_ollama_chat_and_embeddings(tmp_path, sample_path, ollam
     assert len(StubOllama.requests) == before
 
 
+def test_lan_server_down_fails_over_to_local(tmp_path, sample_path, ollama_host):
+    settings = make_settings(tmp_path, f"lan={DEAD},local={ollama_host}")
+    settings.embedder = "ollama"
+    assistant = Assistant(settings)
+    assistant.ingest_paths([sample_path])        # embeddings also fail over
+    answer = assistant.ask("How does the Banker's algorithm decide whether to grant a request?")
+    assert answer.status == "answered" and answer.server == "local"
+
+    statuses = {s.server.name: s for s in assistant.router.check_all(timeout=2)}
+    assert not statuses["lan"].reachable and statuses["lan"].error == "not reachable"
+    assert statuses["local"].reachable
+    assert statuses["local"].has_model("llama3.1:8b")
+
+
+def test_explicit_server_does_not_fail_over(tmp_path, sample_path, ollama_host):
+    settings = make_settings(tmp_path, f"lan={DEAD},local={ollama_host}")
+    settings.ollama_server = "lan"
+    assistant = Assistant(settings)
+    assistant.ingest_paths([sample_path])
+    answer = assistant.ask("What is Belady's anomaly?")
+    assert answer.status == "error"
+    assert "Could not reach Ollama server 'lan'" in answer.text
+    assert "ollama serve" in answer.text
+
+
+def test_missing_model_on_one_server_uses_the_next(tmp_path, sample_path, ollama_host):
+    servers = ServerRegistry([OllamaServer("big", ollama_host, model="llama3.1:70b"),
+                              OllamaServer("small", ollama_host)])
+    servers.path = tmp_path / "s.json"
+    servers.save()
+    settings = make_settings(tmp_path, "")
+    settings.servers_file = servers.path
+    assistant = Assistant(settings)
+    assistant.ingest_paths([sample_path])
+    answer = assistant.ask("How does the Banker's algorithm decide whether to grant a request?")
+    assert answer.status == "answered"
+    assert (answer.server, answer.model) == ("small", "llama3.1:8b")
+
+
 def test_missing_model_message(tmp_path, sample_path, ollama_host):
-    settings = Settings()
-    settings.index_dir = tmp_path / "index"
-    settings.ollama_host = ollama_host
+    settings = make_settings(tmp_path, f"local={ollama_host}")
     settings.model = "mistral:7b"
     assistant = Assistant(settings)
     assistant.ingest_paths([sample_path])
@@ -102,9 +157,7 @@ def test_missing_model_message(tmp_path, sample_path, ollama_host):
 
 
 def test_ollama_not_running(tmp_path, sample_path):
-    settings = Settings()
-    settings.index_dir = tmp_path / "index"
-    settings.ollama_host = "http://127.0.0.1:9"
+    settings = make_settings(tmp_path, f"local={DEAD}")
     assistant = Assistant(settings)
     assistant.ingest_paths([sample_path])
     answer = assistant.ask("What is Belady's anomaly?")

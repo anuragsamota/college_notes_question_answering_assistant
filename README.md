@@ -22,6 +22,7 @@ Sources:
 - **Upload PDFs, Word documents (.docx), Markdown and text files.** The assistant keeps page numbers and section headings.
 - **Hybrid retrieval.** BM25 and TF-IDF scoring, with optional dense embeddings, combined using Reciprocal Rank Fusion. MMR then picks a varied set of passages.
 - **Local, grounded generation with Ollama.** The model must cite a numbered passage for each statement, and the app checks every citation against the passage it points to.
+- **Local and LAN Ollama servers.** Use Ollama on your own computer, on another machine on your network (such as a lab GPU box), or both. With both, the assistant automatically switches to the next server when one is off, and each server can run its own model.
 - **Three safeguards against unsupported answers** (see below).
 - **Follow-up questions in chat.** Short follow-ups like "and LRU?" use the topic of the previous question.
 - **CLI and Streamlit web UI**, plus a retrieval evaluation script that runs without an LLM.
@@ -48,6 +49,8 @@ Sources:
         ▼                                     ▼ passes
    generator.py            numbered excerpts → Ollama chat model; it answers
         │                  from them with [n] citations, or NOT_IN_NOTES
+        │                  servers.py picks the server: a named one, or "auto"
+        │                  (LAN GPU box → laptop → …, skipping any that are down)
         ▼
    citation check          drop [n] that point nowhere; each cited sentence must
         │                  share most content words with the excerpt it cites
@@ -98,6 +101,79 @@ ones (`llama3.2:3b`, `qwen2.5:3b`) run on modest laptops but produce more
 answers that fail the citation check. Reasoning models such as `qwen3` or
 `deepseek-r1` also work; their `<think>` output is removed from the answer.
 
+## Ollama servers: local, LAN, or both
+
+Out of the box the assistant uses one server, `local`, at `http://localhost:11434`
+(or `$OLLAMA_HOST`). You can add Ollama instances running on other machines on
+your network. This is useful when a desktop or lab machine with a GPU can run a
+bigger model than your laptop.
+
+**1. Make the LAN machine accept network connections.** By default Ollama only
+listens on localhost. On the LAN machine:
+
+```bash
+OLLAMA_HOST=0.0.0.0 ollama serve        # or set OLLAMA_HOST for the Ollama service
+ollama pull llama3.1:70b                # whatever model that machine should run
+```
+
+Allow port 11434 through that machine's firewall. Ollama has no authentication,
+so only do this on a network you trust.
+
+**2. Add it to the assistant**, from the CLI or from the **Ollama server**
+section of the web UI's sidebar:
+
+```bash
+python -m notes_qa.cli servers add lab-gpu 192.168.1.50 --model llama3.1:70b --first
+python -m notes_qa.cli servers                     # live status of every server
+```
+
+```
+selected: auto  (servers tried in this order)
+ * lab-gpu      http://192.168.1.50:11434        model=llama3.1:70b  up (4 ms)
+ * local        http://localhost:11434           model=llama3.1:8b  up (1 ms)
+```
+
+**3. Choose how servers are used:**
+
+| Selection | Behaviour |
+|---|---|
+| `auto` (default) | Try enabled servers in list order. If one is unreachable, times out, or lacks the model, the next answers. A server that failed is moved to the back of the order for 30 s, so a switched-off machine doesn't slow every question. |
+| a server name | Always use that server, with no switching. If it is down, you get a clear error. |
+
+```bash
+python -m notes_qa.cli servers use auto            # or: use lab-gpu / use local
+python -m notes_qa.cli servers prefer local        # move to the front of the auto order
+python -m notes_qa.cli servers disable lab-gpu     # skip it in auto mode (enable to undo)
+python -m notes_qa.cli servers remove lab-gpu
+python -m notes_qa.cli --server local ask "..."    # one-off override
+```
+
+In the web UI, the sidebar shows each server's status (🟢/🔴), the models
+installed on it, and controls to pick a chat model, enable or disable, prefer,
+remove, or add servers. Each answer notes which server and model produced it.
+
+The configuration is stored in `ollama_servers.json` (git-ignored; see
+`ollama_servers.example.json`):
+
+```json
+{
+  "default": "auto",
+  "servers": [
+    {"name": "lab-gpu", "host": "http://192.168.1.50:11434", "model": "llama3.1:70b", "enabled": true},
+    {"name": "local",   "host": "http://localhost:11434",    "model": "llama3.2:3b",  "enabled": true}
+  ]
+}
+```
+
+`model` is optional; servers without one use `NOTES_QA_MODEL`. Addresses can be
+written as `192.168.1.50`, `gpu-box:11434`, or a full `http(s)://` URL. The
+port defaults to 11434. For a one-off setup without the file, use
+`NOTES_QA_OLLAMA_SERVERS="lab-gpu=192.168.1.50,local=localhost"`.
+
+If you use Ollama embeddings (`NOTES_QA_EMBEDDER=ollama`), pull the same
+embedding model on every server. Requests switch servers the same way chat
+does, and vectors from different models can't be mixed in one index.
+
 ## Usage
 
 ### CLI
@@ -139,7 +215,9 @@ for n, hit in answer.cited_sources:
 
 `answer.status` is one of `answered`, `not_in_notes` (the model found no
 answer in the excerpts), `no_relevant_notes` (declined by the relevance gate),
-or `error` (for example, Ollama isn't running or the model isn't pulled).
+or `error` (for example, no Ollama server is reachable or the model isn't
+pulled). `answer.server` and `answer.model` say which server and model
+answered.
 `answer.support_ratio` is the verified share of the answer, and
 `answer.unsupported` lists the sentences that failed the citation check.
 
@@ -150,8 +228,13 @@ Environment variables (see `notes_qa/config.py`):
 | Variable | Default | Meaning |
 |---|---|---|
 | `NOTES_QA_INDEX_DIR` | `.notes_index` | where the index is stored |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server address |
-| `NOTES_QA_MODEL` | `llama3.1:8b` | Ollama chat model used for answers |
+| `NOTES_QA_SERVERS_FILE` | `ollama_servers.json` | where the server list is stored |
+| `NOTES_QA_OLLAMA_SERVERS` | — | `name=host,name=host` server list for this run (overrides the file) |
+| `NOTES_QA_SERVER` | file's `default` | server name or `auto` for this run |
+| `OLLAMA_HOST` | `http://localhost:11434` | address of the built-in `local` server when none are configured |
+| `NOTES_QA_CONNECT_TIMEOUT` | `3` | seconds to wait for a server to accept the connection before moving on |
+| `NOTES_QA_REQUEST_TIMEOUT` | `300` | seconds to wait for an answer to be generated |
+| `NOTES_QA_MODEL` | `llama3.1:8b` | chat model for servers that don't set their own |
 | `NOTES_QA_TEMPERATURE` | `0.1` | sampling temperature |
 | `NOTES_QA_NUM_CTX` | `8192` | context window requested from Ollama (its default is too small for 6 excerpts) |
 | `NOTES_QA_MAX_TOKENS` | `1024` | maximum answer length in tokens |
@@ -208,9 +291,11 @@ python -m pytest
 The tests cover chunking, loaders, ranking, the relevance gate, MMR,
 de-duplication, citation checking (invalid numbers, invented claims with real
 citations), abstention, `<think>` stripping, Ollama errors, follow-up history
-and index persistence. `tests/test_ollama_http.py` runs the real `ollama`
-client against a local stub of Ollama's HTTP API, so no Ollama install or
-model is needed.
+index persistence, server configuration, and switching between servers
+(down, timed out, missing model, explicit selection). `tests/test_ollama_http.py`
+runs the real `ollama` client against local stubs of Ollama's HTTP API,
+including a LAN server that is down while the local one is up. No Ollama
+install or model is needed.
 
 ## Limitations
 

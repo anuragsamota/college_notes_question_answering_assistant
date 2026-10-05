@@ -110,20 +110,20 @@ class SentenceTransformerEmbedder:
 
 
 class OllamaEmbedder:
-    """Dense embedder backed by an Ollama embedding model (e.g. nomic-embed-text)."""
+    """Dense embedder backed by an Ollama embedding model (e.g. nomic-embed-text).
 
-    def __init__(self, model_name: str, host: str | None = None, batch_size: int = 64):
-        import ollama
+    Requests go through the server router, so they fail over like chat does.
+    """
 
-        self.client = ollama.Client(host=host)
-        self.model = model_name
+    def __init__(self, router, batch_size: int = 64):
+        self.router = router
         self.batch_size = batch_size
 
     def encode(self, texts: Sequence[str]) -> np.ndarray:
         vecs: list[list[float]] = []
         for start in range(0, len(texts), self.batch_size):
-            batch = list(texts[start:start + self.batch_size])
-            vecs.extend(self.client.embed(model=self.model, input=batch).embeddings)
+            batch, _ = self.router.embed(list(texts[start:start + self.batch_size]))
+            vecs.extend(batch)
         arr = np.asarray(vecs, dtype=np.float32)
         return arr / np.maximum(np.linalg.norm(arr, axis=1, keepdims=True), 1e-9)
 

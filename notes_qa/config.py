@@ -36,9 +36,20 @@ class Settings:
     # Embedding model; defaults to nomic-embed-text (ollama) / all-MiniLM-L6-v2.
     embed_model: str = field(default_factory=lambda: _env("EMBED_MODEL", ""))
 
-    # Generation with a local model served by Ollama.
-    # Host defaults to $OLLAMA_HOST, then http://localhost:11434.
+    # Ollama servers (local and/or LAN), see notes_qa/servers.py.
+    servers_file: Path = field(
+        default_factory=lambda: Path(_env("SERVERS_FILE", "ollama_servers.json")))
+    # "name=host,name=host" defines the server list for this run instead of the file.
+    ollama_servers: str = field(default_factory=lambda: _env("OLLAMA_SERVERS", ""))
+    # Server name or "auto" (failover in list order); empty = the file's default.
+    ollama_server: str = field(default_factory=lambda: _env("SERVER", ""))
+    # Address of the built-in "local" server when no servers are configured.
     ollama_host: str | None = field(default_factory=lambda: os.environ.get("OLLAMA_HOST"))
+    # Fail fast on a switched-off LAN machine, but allow slow generation.
+    connect_timeout: float = field(default_factory=lambda: float(_env("CONNECT_TIMEOUT", "3")))
+    request_timeout: float = field(default_factory=lambda: float(_env("REQUEST_TIMEOUT", "300")))
+
+    # Generation. Default chat model for servers that don't name their own.
     model: str = field(default_factory=lambda: _env("MODEL", "llama3.1:8b"))
     temperature: float = field(default_factory=lambda: float(_env("TEMPERATURE", "0.1")))
     # Ollama's default context window is small; 6 excerpts + prompt need ~3-4k tokens.

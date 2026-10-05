@@ -2,8 +2,9 @@ from types import SimpleNamespace as NS
 
 import ollama
 
-from notes_qa.generator import ABSTAIN_TOKEN, SYSTEM_PROMPT, AnswerGenerator, parse_response
+from notes_qa.generator import ABSTAIN_TOKEN, SYSTEM_PROMPT, parse_response
 from notes_qa.pipeline import Assistant
+from notes_qa.servers import OllamaRouter, OllamaServer, ServerRegistry
 
 
 def reply(content, done_reason="stop"):
@@ -23,9 +24,15 @@ class FakeOllama:
         return self.resp
 
 
+def fake_router(client, model="llama3.1:8b"):
+    registry = ServerRegistry([OllamaServer("local", "localhost")])
+    return OllamaRouter(registry, default_model=model,
+                        client_factory=lambda host, timeout: client)
+
+
 def make_assistant(settings, sample_path, resp=None, error=None):
     client = FakeOllama(resp, error)
-    assistant = Assistant(settings, generator=AnswerGenerator(client, model="llama3.1:8b"))
+    assistant = Assistant(settings, router=fake_router(client))
     assistant.ingest_paths([sample_path])
     return assistant, client
 
@@ -50,6 +57,7 @@ def test_grounded_answer_is_verified(settings, sample_path):
     answer = assistant.ask("What are the necessary conditions for deadlock?")
 
     assert answer.status == "answered" and answer.grounded
+    assert answer.server == "local" and answer.model == "llama3.1:8b"
     assert answer.support_ratio == 1.0
     assert answer.unsupported == [] and answer.warnings == []
     assert [num for num, _ in answer.cited_sources] == [n]
@@ -123,6 +131,7 @@ def test_ollama_errors_are_reported(settings, sample_path):
                                   error=ollama.ResponseError("model not found", 404))
     answer = assistant.ask("What is paging?")
     assert answer.status == "error" and "ollama pull llama3.1:8b" in answer.text
+    assert "'local'" in answer.text
 
     assistant, _ = make_assistant(settings, sample_path, error=ConnectionError("down"))
     answer = assistant.ask("What is paging?")
@@ -152,7 +161,7 @@ def test_index_persists_and_replaces(settings, sample_path):
     n = len(assistant.chunks)
     assistant.ingest_paths([sample_path])          # re-ingest replaces, not duplicates
     assert len(assistant.chunks) == n
-    reloaded = Assistant(settings, generator=AnswerGenerator(FakeOllama()))
+    reloaded = Assistant(settings, router=fake_router(FakeOllama()))
     assert len(reloaded.chunks) == n
     assert [d.source for d in reloaded.documents()] == ["os_lecture_notes.md"]
     assert reloaded.remove("os_lecture_notes.md")

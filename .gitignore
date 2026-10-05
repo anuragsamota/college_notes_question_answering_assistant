@@ -7,3 +7,5 @@ venv/
 .pytest_cache/
 # Local index built from your notes
 .notes_index/
+# Machine-specific Ollama server list (see ollama_servers.example.json)
+ollama_servers.json

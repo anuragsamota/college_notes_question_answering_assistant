@@ -13,28 +13,44 @@ from notes_qa.generator import Answer, AnswerGenerator
 from notes_qa.loaders import Page, iter_note_files, load_file
 from notes_qa.retrieval import (Embedder, HybridRetriever, RetrievalResult,
                                 OllamaEmbedder, SentenceTransformerEmbedder, analyze)
+from notes_qa.servers import NoServerAvailable, OllamaRouter, ServerRegistry
 from notes_qa.store import DocumentInfo, IndexStore, summarize_documents
 
 
 class Assistant:
     def __init__(self, settings: Settings | None = None, *,
+                 router: OllamaRouter | None = None,
                  generator: AnswerGenerator | None = None,
                  embedder: Embedder | None = None):
         self.settings = settings or Settings()
         s = self.settings
         self.store = IndexStore(s.index_dir)
         self.chunker = Chunker(s.chunk_chars, s.chunk_overlap_sentences)
+        if router is None:
+            registry = ServerRegistry.load(s.servers_file, env_servers=s.ollama_servers,
+                                           local_host=s.ollama_host)
+            router = OllamaRouter(registry, default_model=s.model,
+                                  embed_model=s.resolved_embed_model,
+                                  connect_timeout=s.connect_timeout,
+                                  read_timeout=s.request_timeout)
+        self.router = router
+        if s.ollama_server:
+            self.router.selection = s.ollama_server
+            self.router.registry.candidates(s.ollama_server)  # validate the name early
         self.embedder = embedder
         if self.embedder is None and s.embedder == "sentence-transformers":
             self.embedder = SentenceTransformerEmbedder(s.resolved_embed_model)
         elif self.embedder is None and s.embedder == "ollama":
-            self.embedder = OllamaEmbedder(s.resolved_embed_model, s.ollama_host)
+            self.embedder = OllamaEmbedder(self.router)
         self.generator = generator or AnswerGenerator(
-            model=s.model, host=s.ollama_host, temperature=s.temperature,
-            num_ctx=s.num_ctx, max_tokens=s.max_tokens,
-            min_overlap=s.min_citation_overlap)
+            self.router, temperature=s.temperature, num_ctx=s.num_ctx,
+            max_tokens=s.max_tokens, min_overlap=s.min_citation_overlap)
         self.chunks, embeddings = self.store.load(self._embedder_name)
         self._rebuild(embeddings)
+
+    @property
+    def servers(self) -> ServerRegistry:
+        return self.router.registry
 
     @property
     def _embedder_name(self) -> str:
@@ -104,7 +120,11 @@ class Assistant:
         if not self.chunks:
             return Answer(question, "No notes are indexed yet. Upload or ingest some notes "
                           "first.", "no_relevant_notes")
-        result = self.retrieve(question, history)
+        try:
+            result = self.retrieve(question, history)
+        except NoServerAvailable as exc:
+            return Answer(question, "Could not embed the question: no Ollama server for "
+                          f"embeddings is reachable ({exc}).", "error")
         if not result.sufficient:
             msg = "I couldn't find anything in your notes that covers this question."
             if result.missing_terms:

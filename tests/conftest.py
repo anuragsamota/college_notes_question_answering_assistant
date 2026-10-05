@@ -12,6 +12,9 @@ def settings(tmp_path) -> Settings:
     s = Settings()
     s.index_dir = tmp_path / "index"
     s.embedder = "tfidf"
+    s.servers_file = tmp_path / "ollama_servers.json"
+    s.ollama_servers = ""
+    s.ollama_server = ""
     return s
 
 
